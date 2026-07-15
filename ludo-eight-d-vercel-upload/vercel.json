@@ -1,0 +1,8 @@
+{
+  "rewrites": [
+    {
+      "source": "/",
+      "destination": "/ludo-8d-responsive.html"
+    }
+  ]
+}
