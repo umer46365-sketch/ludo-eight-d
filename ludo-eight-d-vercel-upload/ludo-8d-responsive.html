@@ -23,8 +23,8 @@ const FACEBOOK_APP_ID='726290033912423';
 let facebookProfile=null;
 function setFacebookStatus(message){const box=document.getElementById('fb-status');if(box)box.textContent=message}
 function loadFacebookSDK(){return new Promise((resolve,reject)=>{if(window.FB)return resolve();window.fbAsyncInit=()=>{window.FB.init({appId:FACEBOOK_APP_ID,cookie:true,xfbml:false,version:'v24.0'});resolve()};const script=document.createElement('script');script.async=true;script.defer=true;script.src='https://connect.facebook.net/en_US/sdk.js';script.onerror=()=>reject(new Error('Facebook SDK could not load'));document.head.appendChild(script)})}
-async function facebookLogin(){try{setFacebookStatus('Connecting to Facebook…');await loadFacebookSDK();window.FB.login(result=>{if(!result.authResponse){setFacebookStatus('Facebook login was cancelled.');return}window.FB.api('/me',{fields:'id,name,picture'},profile=>{if(!profile||profile.error){setFacebookStatus('Could not read Facebook profile.');return}facebookProfile=profile;document.getElementById('name').value=profile.name||'Player';setFacebookStatus('Connected as '+(profile.name||'Facebook Player')+' ✓')})},{scope:'public_profile'})}catch(error){setFacebookStatus('Facebook could not connect. Check the Meta domain settings.')}}
-function inviteWhatsApp(){const room='LUDO-'+Math.floor(1000+Math.random()*9000);const link=window.location.origin+window.location.pathname+'?room='+room;const message='Join my Ludo 8D room!\nRoom: '+room+'\n'+link;window.open('https://wa.me/?text='+encodeURIComponent(message),'_blank','noopener')}
+async function facebookLogin(){try{setFacebookStatus('Connecting to Facebook…');let profile;if(window.firebaseFacebookLogin) profile=await window.firebaseFacebookLogin();else {await loadFacebookSDK();profile=await new Promise((resolve,reject)=>window.FB.login(result=>{if(!result.authResponse)return reject(new Error('Facebook login was cancelled'));window.FB.api('/me',{fields:'id,name,picture'},data=>data?.error?reject(data.error):resolve(data))},{scope:'public_profile'}))}facebookProfile=profile;document.getElementById('name').value=profile.name||'Player';setFacebookStatus('Connected as '+(profile.name||'Facebook Player')+' ✓')}catch(error){setFacebookStatus(error?.message||'Facebook could not connect. Check the Meta domain settings.')}}
+async function inviteWhatsApp(){try{setFacebookStatus('Creating private room…');const room=window.firebaseCreateRoom?await window.firebaseCreateRoom(document.getElementById('name').value.trim()||'Player'):'LUDO-'+Math.floor(1000+Math.random()*9000);const link=window.location.origin+window.location.pathname+'?room='+room;const message='Join my Ludo 8D room!\nRoom: '+room+'\n'+link;window.open('https://wa.me/?text='+encodeURIComponent(message),'_blank','noopener');setFacebookStatus('Room '+room+' created. Invite sent!')}catch(error){setFacebookStatus('Room could not be created: '+(error?.message||'try again'))}}
 const track=['6-0','6-1','6-2','6-3','6-4','6-5','5-6','4-6','3-6','2-6','1-6','0-6','0-7','0-8','1-8','2-8','3-8','4-8','5-8','6-9','6-10','6-11','6-12','6-13','6-14','7-14','8-14','8-13','8-12','8-11','8-10','8-9','9-8','10-8','11-8','12-8','13-8','14-8','14-7','14-6','13-6','12-6','11-6','10-6','9-6','8-5','8-4','8-3','8-2','8-1','8-0','7-0'];
 const order=['red','green','yellow','blue'];
 const starts={red:1,green:14,yellow:40,blue:27};
@@ -56,5 +56,42 @@ function back(){game.classList.add('hidden');lobby.classList.remove('hidden')}
 makeBoard();makeTokens();document.querySelectorAll('.mode').forEach(button=>button.addEventListener('click',()=>{mode=button.dataset.mode;document.querySelectorAll('.mode').forEach(item=>item.classList.toggle('selected',item===button))}));document.getElementById('facebook-login').addEventListener('click',facebookLogin);document.getElementById('start').addEventListener('click',start);dice.addEventListener('click',()=>{if(order[active]==='red'&&!waiting)doRoll()});document.getElementById('back').addEventListener('click',back);document.getElementById('whatsapp-invite').addEventListener('click',inviteWhatsApp);document.getElementById('chat-send').addEventListener('click',sendChat);chatText.addEventListener('keydown',event=>{if(event.key==='Enter')sendChat()});window.addEventListener('resize',()=>{if(!game.classList.contains('hidden'))render()});
 // The lobby remains visible first so a player can connect Facebook or choose a game mode.
 })();
+</script>
+<script type="module">
+import { initializeApp } from 'https://www.gstatic.com/firebasejs/12.16.0/firebase-app.js';
+import { getAuth, FacebookAuthProvider, signInWithPopup } from 'https://www.gstatic.com/firebasejs/12.16.0/firebase-auth.js';
+import { getFirestore, doc, setDoc, serverTimestamp } from 'https://www.gstatic.com/firebasejs/12.16.0/firebase-firestore.js';
+
+const firebaseConfig = {
+  apiKey: 'AIzaSyBvL05pcvSB4siJ0G1GGcyK5WA1Sm4azQI',
+  authDomain: 'ludo-eight-d-online.firebaseapp.com',
+  projectId: 'ludo-eight-d-online',
+  storageBucket: 'ludo-eight-d-online.firebasestorage.app',
+  messagingSenderId: '450869654647',
+  appId: '1:450869654647:web:2460dc183ec886c95ec272'
+};
+const firebaseApp = initializeApp(firebaseConfig);
+const firebaseAuth = getAuth(firebaseApp);
+const firebaseDb = getFirestore(firebaseApp);
+
+window.firebaseFacebookLogin = async () => {
+  const provider = new FacebookAuthProvider();
+  const result = await signInWithPopup(firebaseAuth, provider);
+  return { id: result.user.uid, name: result.user.displayName || 'Facebook Player', picture: result.user.photoURL || '' };
+};
+window.firebaseCreateRoom = async (name) => {
+  const user = firebaseAuth.currentUser;
+  if (!user) throw new Error('Please connect Facebook first.');
+  const room = `LUDO-${Math.floor(1000 + Math.random() * 9000)}`;
+  await setDoc(doc(firebaseDb, 'rooms', room), {
+    hostUid: user.uid,
+    hostName: String(name).slice(0, 18),
+    roomCode: room,
+    players: { [user.uid]: { name: String(name).slice(0, 18), color: 'red' } },
+    status: 'waiting',
+    createdAt: serverTimestamp()
+  });
+  return room;
+};
 </script>
 </body></html>
