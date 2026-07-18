@@ -19,79 +19,66 @@
 <script>
 (() => {
 'use strict';
-const FACEBOOK_APP_ID='726290033912423';
-let facebookProfile=null;
-function setFacebookStatus(message){const box=document.getElementById('fb-status');if(box)box.textContent=message}
-function loadFacebookSDK(){return new Promise((resolve,reject)=>{if(window.FB)return resolve();window.fbAsyncInit=()=>{window.FB.init({appId:FACEBOOK_APP_ID,cookie:true,xfbml:false,version:'v24.0'});resolve()};const script=document.createElement('script');script.async=true;script.defer=true;script.src='https://connect.facebook.net/en_US/sdk.js';script.onerror=()=>reject(new Error('Facebook SDK could not load'));document.head.appendChild(script)})}
-async function facebookLogin(){try{setFacebookStatus('Connecting to Facebook…');let profile;if(window.firebaseFacebookLogin) profile=await window.firebaseFacebookLogin();else {await loadFacebookSDK();profile=await new Promise((resolve,reject)=>window.FB.login(result=>{if(!result.authResponse)return reject(new Error('Facebook login was cancelled'));window.FB.api('/me',{fields:'id,name,picture'},data=>data?.error?reject(data.error):resolve(data))},{scope:'public_profile'}))}facebookProfile=profile;document.getElementById('name').value=profile.name||'Player';setFacebookStatus('Connected as '+(profile.name||'Facebook Player')+' ✓')}catch(error){setFacebookStatus(error?.message||'Facebook could not connect. Check the Meta domain settings.')}}
-async function inviteWhatsApp(){try{setFacebookStatus('Creating private room…');const room=window.firebaseCreateRoom?await window.firebaseCreateRoom(document.getElementById('name').value.trim()||'Player'):'LUDO-'+Math.floor(1000+Math.random()*9000);const link=window.location.origin+window.location.pathname+'?room='+room;const message='Join my Ludo 8D room!\nRoom: '+room+'\n'+link;window.open('https://wa.me/?text='+encodeURIComponent(message),'_blank','noopener');setFacebookStatus('Room '+room+' created. Invite sent!')}catch(error){setFacebookStatus('Room could not be created: '+(error?.message||'try again'))}}
 const track=['6-0','6-1','6-2','6-3','6-4','6-5','5-6','4-6','3-6','2-6','1-6','0-6','0-7','0-8','1-8','2-8','3-8','4-8','5-8','6-9','6-10','6-11','6-12','6-13','6-14','7-14','8-14','8-13','8-12','8-11','8-10','8-9','9-8','10-8','11-8','12-8','13-8','14-8','14-7','14-6','13-6','12-6','11-6','10-6','9-6','8-5','8-4','8-3','8-2','8-1','8-0','7-0'];
 const order=['red','green','yellow','blue'];
 const starts={red:1,green:14,yellow:40,blue:27};
 const homes={red:['7-1','7-2','7-3','7-4','7-5','7-6'],green:['1-7','2-7','3-7','4-7','5-7','6-7'],yellow:['13-7','12-7','11-7','10-7','9-7','8-7'],blue:['7-13','7-12','7-11','7-10','7-9','7-8']};
 const safe=new Set([...order.map(c=>track[starts[c]]),...order.map(c=>track[(starts[c]+8)%track.length])]);
-const board=document.getElementById('board'), lobby=document.getElementById('lobby'), game=document.getElementById('game'), dice=document.getElementById('dice'), status=document.getElementById('status'), turn=document.getElementById('turn'), players=document.getElementById('players'), chatLog=document.getElementById('chat-log'), chatText=document.getElementById('chat-text');
-const tokens={red:[],green:[],yellow:[],blue:[]}; let pos,active=0,roll=0,waiting=false,busy=false,playerName='Spitfire_1',ended=false,mode='classic';
+const board=document.getElementById('board'),lobby=document.getElementById('lobby'),game=document.getElementById('game'),dice=document.getElementById('dice'),status=document.getElementById('status'),turn=document.getElementById('turn'),players=document.getElementById('players'),chatLog=document.getElementById('chat-log'),chatText=document.getElementById('chat-text'),nameInput=document.getElementById('name');
+const tokens={red:[],green:[],yellow:[],blue:[]};
+let pos,active=0,roll=0,waiting=false,busy=false,playerName='Spitfire_1',ended=false,mode='classic';
+let roomCode='',myColor='red',roomPlayers=[],remoteMode=false;
 const homeSpot={red:[[9,9],[25,9],[9,25],[25,25]],green:[[66,9],[82,9],[66,25],[82,25]],yellow:[[9,66],[25,66],[9,82],[25,82]],blue:[[66,66],[82,66],[66,82],[82,82]]};
-function cap(c){return c[0].toUpperCase()+c.slice(1)}
-function laneStart(){return mode==='quick'?15:51}
-function lastStep(){return mode==='quick'?20:56}
-function coord(c,s){if(s<0||s===-2)return null;let lane=laneStart();return s<lane?track[(starts[c]+s)%52]:homes[c][s-lane]}
-function isTrack(c,s){return s>=0&&s<laneStart()}
-function makeBoard(){for(let r=0;r<15;r++)for(let c=0;c<15;c++){let el=document.createElement('div'),id=`${r}-${c}`;el.className='cell';el.id='cell-'+id; if(track.includes(id))el.classList.add('path');for(const color of order)if(homes[color].includes(id))el.classList.add('home-'+color);if(safe.has(id)){el.classList.add('safe'); if(Object.entries(starts).some(([color,index])=>track[index]===id)) {let color=Object.keys(starts).find(x=>track[starts[x]]===id);el.classList.add('start',color)}}board.append(el)}}
-function makeTokens(){for(const color of order)for(let i=0;i<4;i++){let t=document.createElement('button');t.type='button';t.className='token '+color;t.setAttribute('aria-label',color+' token '+(i+1));t.addEventListener('click',()=>choose(color,i));board.append(t);tokens[color].push(t)}}
-function render(){const br=board.getBoundingClientRect();for(const color of order)for(let i=0;i<4;i++){const t=tokens[color][i],s=pos[color][i];t.classList.remove('valid');t.textContent='';t.style.display='block';if(s===-1){let [x,y]=homeSpot[color][i];t.style.left=x+'%';t.style.top=y+'%'}else if(s===-2){t.style.left='47%';t.style.top='47%'}else{let cell=document.getElementById('cell-'+coord(color,s));if(!cell)continue;let cr=cell.getBoundingClientRect();t.style.left=(cr.left-br.left+(cr.width-t.offsetWidth)/2)+'px';t.style.top=(cr.top-br.top+(cr.height-t.offsetHeight)/2)+'px'}}renderPlayers()}
-function renderPlayers(){players.innerHTML='';for(const color of order){let goals=pos[color].filter(x=>x===-2).length, row=document.createElement('div');row.className='player'+(order[active]===color?' active':'');row.style.setProperty('--p','var(--'+color+')');row.innerHTML=`<b>${color==='red'?playerName:cap(color)+' Bot'}</b><span>${goals}/4 HOME</span>`;players.append(row)}let c=order[active];turn.textContent=c==='red'?playerName.toUpperCase()+"'S TURN":cap(c).toUpperCase()+" BOT'S TURN";turn.style.color='var(--'+c+')'}
-function canMove(color,i,n){let s=pos[color][i];return s===-1?n===6:s>=0&&s+n<=lastStep()}
+const cap=c=>c[0].toUpperCase()+c.slice(1);
+const setFacebookStatus=m=>{const b=document.getElementById('fb-status');if(b)b.textContent=m};
+const laneStart=()=>mode==='quick'?15:51;
+const lastStep=()=>mode==='quick'?20:56;
+const coord=(c,s)=>s<0||s===-2?null:(s<laneStart()?track[(starts[c]+s)%52]:homes[c][s-laneStart()]);
+const isTrack=(c,s)=>s>=0&&s<laneStart();
+function gameState(){return {positions:pos,active,roll,waiting,ended,mode};}
 function setDice(v){dice.dataset.v=String(v)}
-function doRoll(){if(busy||ended)return;busy=true;dice.disabled=true;setDice('?');status.textContent='Rolling…';setTimeout(()=>{roll=Math.floor(Math.random()*6)+1;setDice(roll);let color=order[active],valid=[0,1,2,3].filter(i=>canMove(color,i,roll));if(!valid.length){status.textContent=`${cap(color)} rolled ${roll}: no move.`;busy=false;setTimeout(next,700);return}waiting=true;busy=false;if(color==='red'){status.textContent='Choose a glowing red token.';valid.forEach(i=>tokens.red[i].classList.add('valid'));dice.disabled=true}else{status.textContent=`${cap(color)} Bot is moving…`;setTimeout(()=>move(color,valid[0]),500)}},450)}
-function choose(color,i){if(ended||busy||!waiting||color!=='red'||color!==order[active]||!tokens[color][i].classList.contains('valid'))return;move(color,i)}
-function move(color,i){if(busy||ended)return;busy=true;waiting=false;for(const c of order)tokens[c].forEach(t=>t.classList.remove('valid'));let target=pos[color][i]===-1?0:pos[color][i]+roll;function step(){if(pos[color][i]<target){pos[color][i]=pos[color][i]===-1?0:pos[color][i]+1;render();setTimeout(step,130);return}if(pos[color][i]===lastStep()){pos[color][i]=-2;render();if(pos[color].every(x=>x===-2)){ended=true;status.textContent=`🏆 ${cap(color)} wins the game!`;dice.disabled=true;alert(cap(color)+' wins!');return}}capture(color,i);busy=false;if(roll===6){status.textContent='You rolled 6 — roll again!';dice.disabled=color!=='red';if(color!=='red')setTimeout(doRoll,450)}else next()}step()}
-function capture(color,i){let c=coord(color,pos[color][i]);if(!c||safe.has(c))return;for(const other of order){if(other===color)continue;for(let j=0;j<4;j++)if(isTrack(other,pos[other][j])&&coord(other,pos[other][j])===c){pos[other][j]=-1;status.textContent=`${cap(color)} captured ${cap(other)}!`;render()}}}
-function next(){if(ended)return;active=(active+1)%4;waiting=false;busy=false;dice.disabled=order[active]!=='red';render();status.textContent=order[active]==='red'?'Roll the dice.':cap(order[active])+' Bot is thinking…';if(order[active]!=='red')setTimeout(doRoll,500)}
-function say(name,text,color){let row=document.createElement('div');row.className='chat-msg';row.style.borderLeftColor=color;row.textContent=name+': '+text;chatLog.append(row);chatLog.scrollTop=chatLog.scrollHeight}
-function sendChat(){let text=chatText.value.trim();if(!text)return;say(playerName,text,'var(--red)');chatText.value='';setTimeout(()=>say('Green Bot',['Nice move!','Good luck!','Watch the safe stop.'][Math.floor(Math.random()*3)],'var(--green)'),450)}
-function start(){playerName=document.getElementById('name').value.trim()||'Player';lobby.classList.add('hidden');game.classList.remove('hidden');pos={red:[-1,-1,-1,-1],green:[-1,-1,-1,-1],yellow:[-1,-1,-1,-1],blue:[-1,-1,-1,-1]};chatLog.replaceChildren();say('System',(mode==='quick'?'Quick Match':'Classic Ludo')+' started.','var(--blue)');active=0;roll=0;waiting=false;busy=false;ended=false;dice.disabled=false;setDice('?');status.textContent='Roll the dice. You need 6 to leave home.';requestAnimationFrame(render)}
-function back(){game.classList.add('hidden');lobby.classList.remove('hidden')}
-makeBoard();makeTokens();document.querySelectorAll('.mode').forEach(button=>button.addEventListener('click',()=>{mode=button.dataset.mode;document.querySelectorAll('.mode').forEach(item=>item.classList.toggle('selected',item===button))}));document.getElementById('facebook-login').addEventListener('click',facebookLogin);document.getElementById('start').addEventListener('click',start);dice.addEventListener('click',()=>{if(order[active]==='red'&&!waiting)doRoll()});document.getElementById('back').addEventListener('click',back);document.getElementById('whatsapp-invite').addEventListener('click',inviteWhatsApp);document.getElementById('chat-send').addEventListener('click',sendChat);chatText.addEventListener('keydown',event=>{if(event.key==='Enter')sendChat()});window.addEventListener('resize',()=>{if(!game.classList.contains('hidden'))render()});
-// The lobby remains visible first so a player can connect Facebook or choose a game mode.
+function sync(){if(remoteMode&&window.firebaseSaveRoomState)window.firebaseSaveRoomState(roomCode,gameState()).catch(()=>{});}
+function validMoves(color){return [0,1,2,3].filter(i=>{let s=pos[color][i];return s===-1?roll===6:s>=0&&s+roll<=lastStep()});}
+function refreshValid(){for(const c of order)tokens[c].forEach(t=>t.classList.remove('valid'));if(waiting&&!ended&&order[active]===myColor)validMoves(myColor).forEach(i=>tokens[myColor][i].classList.add('valid'));}
+function makeBoard(){for(let r=0;r<15;r++)for(let c=0;c<15;c++){const el=document.createElement('div'),id=`${r}-${c}`;el.className='cell';el.id='cell-'+id;if(track.includes(id))el.classList.add('path');for(const color of order)if(homes[color].includes(id))el.classList.add('home-'+color);if(safe.has(id)){el.classList.add('safe');const startColor=order.find(color=>track[starts[color]]===id);if(startColor)el.classList.add('start',startColor)}board.append(el)}}
+function makeTokens(){for(const color of order)for(let i=0;i<4;i++){const t=document.createElement('button');t.type='button';t.className='token '+color;t.addEventListener('click',()=>choose(color,i));board.append(t);tokens[color].push(t)}}
+function playerLabel(color){const p=roomPlayers.find(x=>x.color===color);return p?p.name:(color==='red'?playerName:cap(color)+' Bot')}
+function renderPlayers(){players.replaceChildren();for(const color of order){const goals=pos[color].filter(x=>x===-2).length,row=document.createElement('div');row.className='player'+(order[active]===color?' active':'');row.style.setProperty('--p','var(--'+color+')');row.innerHTML=`<b>${playerLabel(color)}</b><span>${goals}/4 HOME</span>`;players.append(row)}const color=order[active];turn.textContent=color===myColor?`${playerLabel(color).toUpperCase()}'S TURN`:`${playerLabel(color).toUpperCase()}'S TURN`;turn.style.color='var(--'+color+')'}
+function render(){if(!pos)return;const br=board.getBoundingClientRect();for(const color of order)for(let i=0;i<4;i++){const t=tokens[color][i],s=pos[color][i];t.classList.remove('valid');t.textContent='';if(s===-1){const [x,y]=homeSpot[color][i];t.style.left=x+'%';t.style.top=y+'%'}else if(s===-2){t.style.left='47%';t.style.top='47%'}else{const cell=document.getElementById('cell-'+coord(color,s));if(!cell)continue;const cr=cell.getBoundingClientRect();t.style.left=(cr.left-br.left+(cr.width-t.offsetWidth)/2)+'px';t.style.top=(cr.top-br.top+(cr.height-t.offsetHeight)/2)+'px'}}renderPlayers();refreshValid();dice.disabled=ended||busy||waiting||order[active]!==myColor}
+function say(name,text,color='#00bfff'){const row=document.createElement('div');row.className='chat-msg';row.style.borderLeftColor=color;row.textContent=name+': '+text;chatLog.append(row);chatLog.scrollTop=chatLog.scrollHeight}
+function startGame(onlineInfo){playerName=nameInput.value.trim()||'Player';lobby.classList.add('hidden');game.classList.remove('hidden');chatLog.replaceChildren();if(onlineInfo){remoteMode=true;roomCode=onlineInfo.code;myColor=onlineInfo.color;roomPlayers=onlineInfo.players||[];if(onlineInfo.state){applyRemote(onlineInfo.state);say('System',`Joined room ${roomCode} as ${myColor}.`,'#00ff66');return}}pos={red:[-1,-1,-1,-1],green:[-1,-1,-1,-1],yellow:[-1,-1,-1,-1],blue:[-1,-1,-1,-1]};active=0;roll=0;waiting=false;busy=false;ended=false;setDice('?');status.textContent=remoteMode?'Waiting for players…':'Roll the dice. You need 6 to leave home.';say('System',remoteMode?`Room ${roomCode} ready.`:(mode==='quick'?'Quick Match':'Classic Ludo')+' started.','#00bfff');requestAnimationFrame(()=>{render();sync()})}
+function applyRemote(state){if(!state||!state.positions)return;pos=state.positions;active=state.active??0;roll=state.roll??0;waiting=!!state.waiting;ended=!!state.ended;mode=state.mode||'classic';busy=false;setDice(roll||'?');if(!game.classList.contains('hidden'))render();}
+function doRoll(){if(busy||ended||order[active]!==myColor)return;busy=true;dice.disabled=true;setDice('?');status.textContent='Rolling…';setTimeout(()=>{roll=Math.floor(Math.random()*6)+1;const color=order[active],valid=validMoves(color);if(!valid.length){waiting=false;busy=false;status.textContent=`${cap(color)} rolled ${roll}: no move.`;sync();setTimeout(next,650);return}waiting=true;busy=false;if(!remoteMode&&color!=='red'){status.textContent=`${cap(color)} Bot is moving…`;setTimeout(()=>move(color,valid[0]),420)}else status.textContent='Choose a glowing token.';sync();render()},450)}
+function choose(color,index){if(ended||busy||!waiting||color!==myColor||color!==order[active]||!tokens[color][index].classList.contains('valid'))return;move(color,index)}
+function move(color,index){if(busy||ended)return;busy=true;waiting=false;for(const c of order)tokens[c].forEach(t=>t.classList.remove('valid'));const target=pos[color][index]===-1?0:pos[color][index]+roll;function step(){if(pos[color][index]<target){pos[color][index]=pos[color][index]===-1?0:pos[color][index]+1;render();setTimeout(step,120);return}if(pos[color][index]===lastStep()){pos[color][index]=-2;if(pos[color].every(x=>x===-2)){ended=true;status.textContent=`🏆 ${cap(color)} wins!`;sync();render();return}}capture(color,index);busy=false;if(roll===6){status.textContent='Rolled 6 — play again!';sync();render()}else next()}step()}
+function capture(color,index){const c=coord(color,pos[color][index]);if(!c||safe.has(c))return;for(const other of order)if(other!==color)for(let i=0;i<4;i++)if(isTrack(other,pos[other][i])&&coord(other,pos[other][i])===c)pos[other][i]=-1}
+function next(){if(ended)return;active=(active+1)%4;waiting=false;busy=false;status.textContent=order[active]===myColor?'Your turn: roll the dice.':`Waiting for ${playerLabel(order[active])}…`;sync();render();if(!remoteMode&&order[active]!=='red')setTimeout(()=>{myColor=order[active];doRoll();myColor='red'},450)}
+async function facebookLogin(){try{setFacebookStatus('Connecting to Facebook…');const profile=await window.firebaseFacebookLogin();nameInput.value=profile.name||'Player';setFacebookStatus('Connected as '+(profile.name||'Facebook Player')+' ✓');const room=new URLSearchParams(location.search).get('room');if(room&&window.firebaseJoinRoom){const info=await window.firebaseJoinRoom(room,profile.name||'Player');startGame(info)}}catch(e){setFacebookStatus(e?.message||'Facebook login failed.')}}
+async function inviteWhatsApp(){try{if(!window.firebaseCreateRoom)throw new Error('Firebase is loading');const info=await window.firebaseCreateRoom(playerName,gameState());remoteMode=true;roomCode=info.code;myColor=info.color;roomPlayers=info.players;sync();const link=location.origin+location.pathname+'?room='+roomCode;window.open('https://wa.me/?text='+encodeURIComponent(`Join my Ludo 8D room!
+Room: ${roomCode}
+${link}`),'_blank','noopener');status.textContent=`Room ${roomCode} created — invite sent.`;render()}catch(e){status.textContent='Room error: '+(e?.message||'try again')}}
+function sendChat(){const text=chatText.value.trim();if(!text)return;say(playerName,text,'#ff174d');chatText.value=''}
+function back(){game.classList.add('hidden');lobby.classList.remove('hidden');remoteMode=false;roomCode='';}
+window.ludoApplyRemote=(state,players)=>{roomPlayers=players||roomPlayers;applyRemote(state)};
+window.addEventListener('ludo-room-ready',e=>startGame(e.detail));
+makeBoard();makeTokens();document.querySelectorAll('.mode').forEach(b=>b.addEventListener('click',()=>{mode=b.dataset.mode;document.querySelectorAll('.mode').forEach(x=>x.classList.toggle('selected',x===b))}));document.getElementById('facebook-login').addEventListener('click',facebookLogin);document.getElementById('start').addEventListener('click',()=>startGame());dice.addEventListener('click',doRoll);document.getElementById('back').addEventListener('click',back);document.getElementById('whatsapp-invite').addEventListener('click',inviteWhatsApp);document.getElementById('chat-send').addEventListener('click',sendChat);chatText.addEventListener('keydown',e=>{if(e.key==='Enter')sendChat()});window.addEventListener('resize',()=>{if(!game.classList.contains('hidden'))render()});
 })();
 </script>
 <script type="module">
 import { initializeApp } from 'https://www.gstatic.com/firebasejs/12.16.0/firebase-app.js';
 import { getAuth, FacebookAuthProvider, signInWithPopup } from 'https://www.gstatic.com/firebasejs/12.16.0/firebase-auth.js';
-import { getFirestore, doc, setDoc, serverTimestamp } from 'https://www.gstatic.com/firebasejs/12.16.0/firebase-firestore.js';
+import { getFirestore, doc, setDoc, updateDoc, getDoc, onSnapshot, runTransaction, serverTimestamp } from 'https://www.gstatic.com/firebasejs/12.16.0/firebase-firestore.js';
 
-const firebaseConfig = {
-  apiKey: 'AIzaSyBvLO5pcvSB4sIj0G1GGcyK5WAlSm4azQI',
-  authDomain: 'ludo-eight-d-online.firebaseapp.com',
-  projectId: 'ludo-eight-d-online',
-  storageBucket: 'ludo-eight-d-online.firebasestorage.app',
-  messagingSenderId: '450869654647',
-  appId: '1:450869654647:web:2460dc183ec886c95ec272'
-};
-const firebaseApp = initializeApp(firebaseConfig);
-const firebaseAuth = getAuth(firebaseApp);
-const firebaseDb = getFirestore(firebaseApp);
+const firebaseConfig={apiKey:'AIzaSyBvLO5pcvSB4sIj0G1GGcyK5WAlSm4azQI',authDomain:'ludo-eight-d-online.firebaseapp.com',projectId:'ludo-eight-d-online',storageBucket:'ludo-eight-d-online.firebasestorage.app',messagingSenderId:'450869654647',appId:'1:450869654647:web:2460dc183ec886c95ec272'};
+const app=initializeApp(firebaseConfig),auth=getAuth(app),db=getFirestore(app);
+let roomUnsubscribe=null;
+const roomRef=code=>doc(db,'rooms',String(code).trim().toUpperCase());
+function code(){return `LUDO-${Math.floor(1000+Math.random()*9000)}`}
+function watchRoom(roomCode){roomUnsubscribe?.();roomUnsubscribe=onSnapshot(roomRef(roomCode),snap=>{if(!snap.exists())return;const data=snap.data();window.ludoApplyRemote?.(data.state,data.players||[]);});}
+window.firebaseFacebookLogin=async()=>{const result=await signInWithPopup(auth,new FacebookAuthProvider());return{id:result.user.uid,name:result.user.displayName||'Facebook Player',picture:result.user.photoURL||''};};
+window.firebaseCreateRoom=async(name,state)=>{const user=auth.currentUser;if(!user)throw new Error('Connect Facebook first.');let roomCode=code(),tries=0;while((await getDoc(roomRef(roomCode))).exists()&&tries++<5)roomCode=code();const player={uid:user.uid,name:String(name).slice(0,18),color:'red'};await setDoc(roomRef(roomCode),{roomCode,hostUid:user.uid,players:[player],state,createdAt:serverTimestamp(),updatedAt:serverTimestamp()});watchRoom(roomCode);return{code:roomCode,color:'red',players:[player],state};};
+window.firebaseJoinRoom=async(roomCode,name)=>{const user=auth.currentUser;if(!user)throw new Error('Connect Facebook first.');const ref=roomRef(roomCode);let result;await runTransaction(db,async tx=>{const snap=await tx.get(ref);if(!snap.exists())throw new Error('Room not found.');const data=snap.data(),players=Array.isArray(data.players)?data.players:[];let player=players.find(p=>p.uid===user.uid);if(!player){if(players.length>=4)throw new Error('Room is full.');const colors=['red','green','yellow','blue'];player={uid:user.uid,name:String(name).slice(0,18),color:colors.find(c=>!players.some(p=>p.color===c))};players.push(player);tx.update(ref,{players,updatedAt:serverTimestamp()});}result={code:String(roomCode).toUpperCase(),color:player.color,players,state:data.state};});watchRoom(result.code);return result;};
+window.firebaseSaveRoomState=async(roomCode,state)=>{if(!roomCode)return;await updateDoc(roomRef(roomCode),{state,updatedAt:serverTimestamp()});};
 
-window.firebaseFacebookLogin = async () => {
-  const provider = new FacebookAuthProvider();
-  const result = await signInWithPopup(firebaseAuth, provider);
-  return { id: result.user.uid, name: result.user.displayName || 'Facebook Player', picture: result.user.photoURL || '' };
-};
-window.firebaseCreateRoom = async (name) => {
-  const user = firebaseAuth.currentUser;
-  if (!user) throw new Error('Please connect Facebook first.');
-  const room = `LUDO-${Math.floor(1000 + Math.random() * 9000)}`;
-  await setDoc(doc(firebaseDb, 'rooms', room), {
-    hostUid: user.uid,
-    hostName: String(name).slice(0, 18),
-    roomCode: room,
-    players: { [user.uid]: { name: String(name).slice(0, 18), color: 'red' } },
-    status: 'waiting',
-    createdAt: serverTimestamp()
-  });
-  return room;
-};
 </script>
 </body></html>
