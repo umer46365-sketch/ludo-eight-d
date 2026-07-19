@@ -121,7 +121,7 @@ function watchRoom(code){roomUnsubscribe?.();roomUnsubscribe=onSnapshot(roomRef(
 async function createPeer(){if(pc)return pc;const stream=window.ludoMedia?.getStream?.();if(!stream)throw new Error('Turn on camera/mic first.');pc=new RTCPeerConnection({iceServers:[{urls:'stun:stun.l.google.com:19302'}]});stream.getTracks().forEach(track=>pc.addTrack(track,stream));pc.ontrack=e=>window.ludoMedia?.showRemote?.(e.streams[0]);pc.onicecandidate=e=>{if(e.candidate&&currentRoom){setDoc(roomRef(currentRoom),{ice:{[currentColor]:arrayUnion(plainCandidate(e.candidate))}},{merge:true}).catch(()=>{});}};pc.onconnectionstatechange=()=>{if(['failed','closed'].includes(pc?.connectionState)){pc?.close();pc=null;addedCandidates.clear();}};return pc;}
 async function startCaller(){if(!currentRoom||currentColor!=='red'||pc)return;const peer=await createPeer();const offer=await peer.createOffer();await peer.setLocalDescription(offer);await updateDoc(roomRef(currentRoom),{callOffer:{type:offer.type,sdp:offer.sdp},callAnswer:null,ice:{red:[],green:[]},updatedAt:serverTimestamp()});}
 async function handleCall(data){if(!currentRoom||!currentColor||!window.ludoMedia?.getStream?.())return;const other=currentColor==='red'?'green':'red';if(currentColor==='red'&&data.callAnswer&&pc&&!pc.currentRemoteDescription){await pc.setRemoteDescription(new RTCSessionDescription(data.callAnswer));}if(currentColor==='green'&&data.callOffer&&!pc){const peer=await createPeer();await peer.setRemoteDescription(new RTCSessionDescription(data.callOffer));const answer=await peer.createAnswer();await peer.setLocalDescription(answer);await updateDoc(roomRef(currentRoom),{callAnswer:{type:answer.type,sdp:answer.sdp},updatedAt:serverTimestamp()});}const candidates=data.ice?.[other]||[];for(const candidate of candidates){const id=candidate.candidate;if(pc&&id&&!addedCandidates.has(id)){try{await pc.addIceCandidate(new RTCIceCandidate(candidate));addedCandidates.add(id)}catch{}}}}
-window.firebaseFacebookLogin=async()=>{const result=await signInWithPopup(auth,new FacebookAuthProvider());return{id:result.user.uid,name:result.user.displayName||'Facebook Player',picture:result.user.photoURL||''};};
+window.firebaseFacebookLogin=async()=>{const result=await signInWithPopup(auth,new FacebookAuthProvider());window.firebaseCurrentUid=result.user.uid;return{id:result.user.uid,name:result.user.displayName||'Facebook Player',picture:result.user.photoURL||''};};
 window.firebaseCreateRoom=async(name,state)=>{const user=auth.currentUser;if(!user)throw new Error('Connect Facebook first.');let code=makeCode(),tries=0;while((await getDoc(roomRef(code))).exists()&&tries++<5)code=makeCode();const player={uid:user.uid,name:String(name).slice(0,18),color:'red'};await setDoc(roomRef(code),{roomCode:code,hostUid:user.uid,players:[player],state,callOffer:null,callAnswer:null,ice:{red:[],green:[]},createdAt:serverTimestamp(),updatedAt:serverTimestamp()});currentRoom=code;currentColor='red';watchRoom(code);return{code,color:'red',players:[player],state};};
 window.firebaseJoinRoom=async(code,name)=>{const user=auth.currentUser;if(!user)throw new Error('Connect Facebook first.');const ref=roomRef(code);let result;await runTransaction(db,async tx=>{const snap=await tx.get(ref);if(!snap.exists())throw new Error('Room not found.');const data=snap.data(),players=Array.isArray(data.players)?data.players:[];let player=players.find(p=>p.uid===user.uid);if(!player){if(players.length>=4)throw new Error('Room is full.');player={uid:user.uid,name:String(name).slice(0,18),color:colors.find(c=>!players.some(p=>p.color===c))};players.push(player);tx.update(ref,{players,updatedAt:serverTimestamp()});}result={code:String(code).toUpperCase(),color:player.color,players,state:data.state};});currentRoom=result.code;currentColor=result.color;watchRoom(result.code);return result;};
 window.firebaseSaveRoomState=async(code,state)=>{if(code)await updateDoc(roomRef(code),{state,updatedAt:serverTimestamp()});};
@@ -129,9 +129,8 @@ window.firebaseStartCall=async(code,color)=>{currentRoom=code;currentColor=color
 
 </script>
 <script type="module">
-import { Room, RoomEvent, Track, TokenSource } from 'https://cdn.jsdelivr.net/npm/livekit-client@2.15.0/+esm';
+import { Room, RoomEvent, Track } from 'https://cdn.jsdelivr.net/npm/livekit-client@2.15.0/+esm';
 
-const sandboxId='ludo8darenacall-7mwff0';
 let liveRoom=null;
 function clearRemoteTiles(){document.querySelectorAll('.remote-livekit').forEach(node=>node.remove());}
 function addRemoteTrack(track,participant){
@@ -144,8 +143,10 @@ function addRemoteTrack(track,participant){
 }
 window.livekitJoin=async(roomName,playerName)=>{
   if(liveRoom?.state==='connected')return;
-  const tokenSource=TokenSource.sandboxTokenServer(sandboxId);
-  const details=await tokenSource.fetch({roomName});
+  const identity=window.firebaseCurrentUid||`${playerName}-${Math.random().toString(36).slice(2,8)}`;
+  const response=await fetch(`/api/livekit-token?room=${encodeURIComponent(roomName)}&identity=${encodeURIComponent(identity)}&name=${encodeURIComponent(playerName)}`);
+  if(!response.ok)throw new Error('Live call server is not configured yet');
+  const details=await response.json();
   const room=new Room({adaptiveStream:true,dynacast:true});
   room.on(RoomEvent.TrackSubscribed,(track,_pub,participant)=>addRemoteTrack(track,participant));
   room.on(RoomEvent.TrackUnsubscribed,(track)=>track.detach().forEach(el=>el.remove()));
