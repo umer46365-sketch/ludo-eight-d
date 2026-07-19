@@ -47,7 +47,7 @@ const safe=new Set([...order.map(c=>track[starts[c]]),...order.map(c=>track[(sta
 const board=document.getElementById('board'),lobby=document.getElementById('lobby'),game=document.getElementById('game'),dice=document.getElementById('dice'),status=document.getElementById('status'),turn=document.getElementById('turn'),players=document.getElementById('players'),chatLog=document.getElementById('chat-log'),chatText=document.getElementById('chat-text'),nameInput=document.getElementById('name'),winnerModal=document.getElementById('winner-modal'),winnerName=document.getElementById('winner-name');
 const localVideo=document.getElementById('local-video'),remoteVideo=document.getElementById('remote-video'),remotePlaceholder=document.getElementById('remote-placeholder'),videoStage=document.getElementById('video-stage'),mediaDot=document.getElementById('media-dot'),micBtn=document.getElementById('mic-btn'),camBtn=document.getElementById('cam-btn'),speakerBtn=document.getElementById('speaker-btn');let mediaStream=null,mediaActive=false,speakerOn=true;
 window.ludoMedia={getStream:()=>mediaStream,showRemote:(stream)=>{remoteVideo.srcObject=stream;remotePlaceholder.style.display='none';videoStage.classList.add('show');mediaDot.classList.add('live')}};
-async function joinArenaCall(){try{mediaStream=await navigator.mediaDevices.getUserMedia({video:true,audio:true});localVideo.srcObject=mediaStream;mediaActive=true;videoStage.classList.add('show');mediaDot.classList.add('live');micBtn.className='media-btn on';camBtn.className='media-btn on';document.getElementById('call-join').className='media-btn on';setFacebookStatus('Camera and mic enabled. Connecting room call…');if(roomCode&&window.firebaseStartCall)window.firebaseStartCall(roomCode,myColor)}catch(e){setFacebookStatus('Camera/mic permission was not allowed.')}}
+async function joinArenaCall(){try{if(roomCode&&window.livekitJoin){await window.livekitJoin(roomCode,playerName);return}mediaStream=await navigator.mediaDevices.getUserMedia({video:true,audio:true});localVideo.srcObject=mediaStream;mediaActive=true;videoStage.classList.add('show');mediaDot.classList.add('live');micBtn.className='media-btn on';camBtn.className='media-btn on';document.getElementById('call-join').className='media-btn on';setFacebookStatus('Camera and mic enabled. Connecting room call…');if(roomCode&&window.firebaseStartCall)window.firebaseStartCall(roomCode,myColor)}catch(e){setFacebookStatus('Camera/mic permission was not allowed.')}}
 function toggleMic(){if(!mediaStream)return;const enabled=!mediaStream.getAudioTracks()[0]?.enabled;mediaStream.getAudioTracks().forEach(t=>t.enabled=enabled);micBtn.className='media-btn '+(enabled?'on':'off')}
 function toggleCam(){if(!mediaStream)return;const enabled=!mediaStream.getVideoTracks()[0]?.enabled;mediaStream.getVideoTracks().forEach(t=>t.enabled=enabled);camBtn.className='media-btn '+(enabled?'on':'off')}
 function toggleSpeaker(){speakerOn=!speakerOn;speakerBtn.className='media-btn '+(speakerOn?'on':'off')}
@@ -126,6 +126,43 @@ window.firebaseCreateRoom=async(name,state)=>{const user=auth.currentUser;if(!us
 window.firebaseJoinRoom=async(code,name)=>{const user=auth.currentUser;if(!user)throw new Error('Connect Facebook first.');const ref=roomRef(code);let result;await runTransaction(db,async tx=>{const snap=await tx.get(ref);if(!snap.exists())throw new Error('Room not found.');const data=snap.data(),players=Array.isArray(data.players)?data.players:[];let player=players.find(p=>p.uid===user.uid);if(!player){if(players.length>=4)throw new Error('Room is full.');player={uid:user.uid,name:String(name).slice(0,18),color:colors.find(c=>!players.some(p=>p.color===c))};players.push(player);tx.update(ref,{players,updatedAt:serverTimestamp()});}result={code:String(code).toUpperCase(),color:player.color,players,state:data.state};});currentRoom=result.code;currentColor=result.color;watchRoom(result.code);return result;};
 window.firebaseSaveRoomState=async(code,state)=>{if(code)await updateDoc(roomRef(code),{state,updatedAt:serverTimestamp()});};
 window.firebaseStartCall=async(code,color)=>{currentRoom=code;currentColor=color;if(color==='red')await startCaller();};
+
+</script>
+<script type="module">
+import { Room, RoomEvent, Track, TokenSource } from 'https://cdn.jsdelivr.net/npm/livekit-client@2.15.0/+esm';
+
+const sandboxId='ludo8darenacall-7mwff0';
+let liveRoom=null;
+function clearRemoteTiles(){document.querySelectorAll('.remote-livekit').forEach(node=>node.remove());}
+function addRemoteTrack(track,participant){
+  if(track.kind===Track.Kind.Audio){document.body.appendChild(track.attach());return;}
+  const stage=document.getElementById('video-stage');
+  document.getElementById('remote-placeholder')?.parentElement?.remove();
+  const tile=document.createElement('div');tile.className='video-tile remote-livekit';
+  const video=track.attach();video.autoplay=true;video.playsInline=true;tile.append(video);
+  const label=document.createElement('span');label.className='video-label';label.textContent=participant.name||participant.identity||'FRIEND';tile.append(label);stage.append(tile);
+}
+window.livekitJoin=async(roomName,playerName)=>{
+  if(liveRoom?.state==='connected')return;
+  const tokenSource=TokenSource.sandboxTokenServer(sandboxId);
+  const details=await tokenSource.fetch({roomName});
+  const room=new Room({adaptiveStream:true,dynacast:true});
+  room.on(RoomEvent.TrackSubscribed,(track,_pub,participant)=>addRemoteTrack(track,participant));
+  room.on(RoomEvent.TrackUnsubscribed,(track)=>track.detach().forEach(el=>el.remove()));
+  room.on(RoomEvent.Disconnected,()=>{clearRemoteTiles();document.getElementById('media-dot')?.classList.remove('live');});
+  await room.connect(details.serverUrl,details.participantToken);
+  await room.localParticipant.enableCameraAndMicrophone();
+  const localPublication=[...room.localParticipant.videoTrackPublications.values()][0];
+  const localTrack=localPublication?.videoTrack;
+  if(localTrack){const video=document.getElementById('local-video');video.srcObject=null;video.replaceWith(localTrack.attach());const replacement=document.querySelector('#video-stage video');if(replacement){replacement.id='local-video';replacement.muted=true;replacement.playsInline=true;}}
+  document.getElementById('video-stage')?.classList.add('show');
+  document.getElementById('media-dot')?.classList.add('live');
+  document.getElementById('mic-btn').className='media-btn on';
+  document.getElementById('cam-btn').className='media-btn on';
+  document.getElementById('call-join').className='media-btn on';
+  liveRoom=room;
+  window.dispatchEvent(new CustomEvent('livekit-connected',{detail:{roomName,playerName}}));
+};
 
 </script>
 </body></html>
